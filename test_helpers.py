@@ -25,6 +25,16 @@ def py(modname, alias=None, smoke=None):
         RESULTS.append((label, 'FAIL', '', f'{type(exc).__name__}: {exc}'))
 
 
+def functional(label, fn):
+    """Run fn() as a real functional test; fn does the work and returns a
+    short success detail string, or raises/asserts on failure."""
+    try:
+        detail = fn()
+        RESULTS.append((label, 'OK', str(detail), ''))
+    except Exception as exc:
+        RESULTS.append((label, 'FAIL', '', f'{type(exc).__name__}: {exc}'))
+
+
 def cli(cmd, version_flag='--version'):
     """Verify `cmd` is on $PATH and responds to a version flag."""
     path = shutil.which(cmd)

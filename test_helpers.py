@@ -1,51 +1,58 @@
-"""Helpers for smoke-testing installed packages and CLI tools."""
+"""Runs test_notebook.py's checks from test_notebook.ipynb and collects the results.
 
-import importlib
-import shutil
-import subprocess
+The checks themselves are listed once, in test_notebook.py (CHECKS and
+FUNCTIONAL), which the image build also runs with pytest. These helpers
+run them in the notebook and record each result in RESULTS as a
+(label, status, version or detail, error) row, for the summary table.
+"""
+
+import tempfile
+from pathlib import Path
 
 RESULTS = []
 
 
 def reset():
-    """Clear RESULTS — call before a fresh run in a long-lived kernel."""
+    """Clear RESULTS -- call before a fresh run in a long-lived kernel."""
     RESULTS.clear()
 
 
-def py(modname, alias=None, smoke=None):
-    """Import `modname` and optionally run `smoke(mod)` as a sanity check."""
-    label = alias or modname
+def _record(label, run):
+    """Run run(), which returns a module, version, or detail, and record the result."""
     try:
-        mod = importlib.import_module(modname)
-        if smoke is not None:
-            smoke(mod)
-        version = getattr(mod, '__version__', '')
-        RESULTS.append((label, 'OK', str(version), ''))
+        result = run()
+        detail = getattr(result, '__version__', '') if hasattr(result, '__name__') else result
+        RESULTS.append((label, 'OK', str(detail or ''), ''))
     except Exception as exc:
         RESULTS.append((label, 'FAIL', '', f'{type(exc).__name__}: {exc}'))
 
 
-def functional(label, fn):
-    """Run fn() as a real functional test; fn does the work and returns a
-    short success detail string, or raises/asserts on failure."""
-    try:
-        detail = fn()
-        RESULTS.append((label, 'OK', str(detail), ''))
-    except Exception as exc:
-        RESULTS.append((label, 'FAIL', '', f'{type(exc).__name__}: {exc}'))
+def run_section(section):
+    """Run the package and command-line checks listed under `section` in
+    test_notebook.py's CHECKS, in order, recording each one."""
+    from test_notebook import CHECKS, run_cli_check, run_py_check
+
+    checks = [c for c in CHECKS if c.section == section]
+    if not checks:
+        sections = list(dict.fromkeys(c.section for c in CHECKS))
+        raise ValueError(f'no checks for section {section!r} in test_notebook.py; it has {sections}')
+    for check in checks:
+        if check.kind == 'cli':
+            def run(check=check):
+                with tempfile.TemporaryDirectory() as tmp:
+                    return run_cli_check(check, tmp)[:80]
+            _record(check.label, run)
+        else:
+            _record(check.label, lambda check=check: run_py_check(check))
 
 
-def cli(cmd, version_flag='--version'):
-    """Verify `cmd` is on $PATH and responds to a version flag."""
-    path = shutil.which(cmd)
-    if not path:
-        RESULTS.append((cmd, 'FAIL', '', 'not on $PATH'))
-        return
-    try:
-        r = subprocess.run([cmd, version_flag],
-                           capture_output=True, text=True, timeout=10)
-        line = (r.stdout or r.stderr).strip().splitlines()
-        version = line[0] if line else 'on PATH'
-        RESULTS.append((cmd, 'OK', version[:80], ''))
-    except Exception as exc:
-        RESULTS.append((cmd, 'OK', 'on PATH', f'{type(exc).__name__}'))
+def run_functional():
+    """Run the functional tests in test_notebook.py's FUNCTIONAL, each in
+    its own temporary directory, recording each one."""
+    from test_notebook import FUNCTIONAL
+
+    for label, check in FUNCTIONAL:
+        def run(check=check):
+            with tempfile.TemporaryDirectory() as tmp:
+                return check(Path(tmp))
+        _record(label, run)
